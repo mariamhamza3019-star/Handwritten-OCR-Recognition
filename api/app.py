@@ -1,39 +1,37 @@
-# app.py
 from fastapi import FastAPI, UploadFile, File, HTTPException
-import torch, io
-from PIL import Image
-from torchvision import transforms, models
 import torch
 import torch.nn as nn
-import cv2
-import numpy as np
 import io
+import numpy as np
+import cv2
+from PIL import Image
+from torchvision import transforms, models
 
-MODEL_PATH          = "best_model_v2.pth"          
-# TRANSFER_MODEL_PATH = "best_model_transfer.pth"  
-NUM_CLASSES = 26                     
-MODEL_TYPE = "cnn"                   #
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu") #gpu instead of cpu
-CLASS_NAMES = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
+# ── Constants ──────────────────────────────────────────────────────────────────
+MODEL_PATH          = "best_model_v2.pth"      # SimpleCNN weights
+TRANSFER_MODEL_PATH = "Transfer_Final.pth"     # MobileNetV2 fine-tuned weights (Phase 3 best)
+NUM_CLASSES         = 26
+DEVICE              = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+CLASS_NAMES         = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
 
+IMG_SIZE_CNN      = 28
+IMG_SIZE_TRANSFER = 128   # must match notebook IMG_SIZE = 128
+
+# ── SimpleCNN (unchanged from original) ───────────────────────────────────────
 class SimpleCNN(nn.Module):
-#Exact replica of CNNModel 
     def __init__(self, num_classes=26):
         super().__init__()
         self.features = nn.Sequential(
-            # Block 1
             nn.Conv2d(1, 32, 3, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.MaxPool2d(2),          # → (32, 14, 14)
 
-            # Block 2
             nn.Conv2d(32, 64, 3, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.MaxPool2d(2),          # → (64, 7, 7)
 
-            # Block 3 — extra depth, no pooling to keep spatial info
             nn.Conv2d(64, 128, 3, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
@@ -48,223 +46,266 @@ class SimpleCNN(nn.Module):
             nn.Dropout(0.3),
             nn.Linear(256, num_classes)
         )
+
     def forward(self, x):
         return self.classifier(self.features(x))
 
 
-# def build_mobilenet(num_classes=26) -> nn.Module:
-#     model = models.mobilenet_v2(weights=None)
-#     # MobileNetV2 expects 3-channel input — keep original first conv
-#     # We'll replicate grayscale to 3 channels in preprocessing instead
-#     model.classifier = nn.Sequential(
-#         nn.Dropout(p=0.3),
-#         nn.Linear(model.last_channel, num_classes)
-#     )
-#     return model
+# ── MobileNetV2 — must exactly mirror build_model() in the notebook ────────────
+# Notebook trains with IMAGENET1K_V1 weights then saves full state_dict.
+# At inference we use weights=None and load everything from the .pth file.
+def build_mobilenet(num_classes: int = 26) -> nn.Module:
+    model = models.mobilenet_v2(weights=None)   # architecture only; weights come from .pth
+    in_features = model.classifier[1].in_features  # 1280
 
-# def load_model(path: str) -> nn.Module:
-#     m = build_mobilenet(NUM_CLASSES)
-#     try:
-#         checkpoint = torch.load(path, map_location=DEVICE)
-#         state = checkpoint.get('model_state_dict', checkpoint)
-#         m.load_state_dict(state)
-#         print(f"Loaded: {path}")
-#     except FileNotFoundError:
-#         print(f"Not found: {path}")
-#     except Exception as e:
-#         print(f"Could not load {path}: {e}")
-#     m.to(DEVICE)
-#     m.eval()
-#     return m
-
-# transform_mobilenet = transforms.Compose([
-#     transforms.Grayscale(),
-#     transforms.Resize((224, 224)),
-#     transforms.Lambda(lambda img: img.convert("RGB")),  # grayscale → RGB
-#     transforms.ToTensor(),
-#     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-# ])
+    # Head must match the notebook's build_model() classifier exactly
+    model.classifier = nn.Sequential(
+        nn.Linear(in_features, 1024),
+        nn.BatchNorm1d(1024),
+        nn.LeakyReLU(0.1, inplace=True),
+        nn.Dropout(0.4),
+        nn.Linear(1024, 512),
+        nn.BatchNorm1d(512),
+        nn.LeakyReLU(0.1, inplace=True),
+        nn.Dropout(0.2),
+        nn.Linear(512, num_classes),
+    )
+    return model
 
 
-def load_model_from(path: str) -> nn.Module: #btakhod file path w bt7wlo l pytorch model 
-    m = SimpleCNN(NUM_CLASSES) #bt3ml empty SimpleCNN model with random weights (docker container thing ig)
-    try:
-        state = torch.load(path, map_location=DEVICE)
-        m.load_state_dict(state)
-        print(f" Loaded: {path}")
-    except FileNotFoundError:
-        print(f" Not found: {path} — using random weights (testing only)")
-    except Exception as e:
-        print(f" Could not load {path}: {e}")
-    m.to(DEVICE)
-    m.eval()
-    return m
-
-IMG_SIZE = 224 if MODEL_TYPE == "mobilenet" else 28
- 
-transform = transforms.Compose([
+# ── Transforms ────────────────────────────────────────────────────────────────
+# CNN: grayscale 28×28, normalised to [-1, 1]
+transform_cnn = transforms.Compose([
     transforms.Grayscale(),
-    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.Resize((IMG_SIZE_CNN, IMG_SIZE_CNN)),
     transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,))  # normalize to [-1, 1]
+    transforms.Normalize((0.5,), (0.5,)),
+])
+
+# MobileNet: convert to RGB *first* (smart_preprocess returns grayscale PIL),
+# then resize and apply ImageNet normalisation.
+# Order matters: Grayscale→RGB→Resize matches the notebook's CharDataset
+# which stacks the single channel 3× before applying transforms.
+transform_transfer = transforms.Compose([
+    transforms.Lambda(lambda img: img.convert("RGB")),   # L → RGB  (no info added, just channel copy)
+    transforms.Resize(
+        (IMG_SIZE_TRANSFER, IMG_SIZE_TRANSFER),
+        interpolation=transforms.InterpolationMode.BILINEAR,
+    ),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
 
+# ── Model loading helpers ──────────────────────────────────────────────────────
+def _load_weights(model: nn.Module, path: str, label: str) -> nn.Module:
+    try:
+        state = torch.load(path, map_location=DEVICE)
+        model.load_state_dict(state)
+        print(f"[OK]  Loaded {label}: {path}")
+    except FileNotFoundError:
+        print(f"[WARN] Not found: {path} — running with random weights (test mode only)")
+    except RuntimeError as e:
+        print(f"[ERR]  Architecture mismatch loading {path}: {e}")
+    except Exception as e:
+        print(f"[ERR]  Could not load {path}: {e}")
+    model.to(DEVICE)
+    model.eval()
+    return model
+
+
+def load_cnn_model(path: str) -> nn.Module:
+    return _load_weights(SimpleCNN(NUM_CLASSES), path, "SimpleCNN")
+
+
+def load_transfer_model(path: str) -> nn.Module:
+    return _load_weights(build_mobilenet(NUM_CLASSES), path, "MobileNetV2")
+
+
+# ── Preprocessing ─────────────────────────────────────────────────────────────
 def smart_preprocess(pil_image: Image.Image) -> Image.Image:
-    #Handles BOTH dataset-style (white letter on black bg)
-    #and real-world-style (dark letter on white bg) images.
     """
-    Strategy:
-    1. Convert to grayscale
-    2. Detect background color (if mostly light → it's a real-world photo → invert it)
-    3. Threshold to get clean binary image
-    4. Crop tightly around the letter (remove whitespace)
-    5. Add small padding so letter isn't touching the edge
+    Normalises an input image so it looks like dataset images:
+    white letter on black background, tightly cropped, square.
+
+    Works for both:
+      • Real-world photos  (dark ink on white paper) → inverts
+      • Dataset-style      (white letter on black)   → passes through
     """
-    img = pil_image.convert("L")  # grayscale
-    img_np = np.array(img)
- 
-    # Step 1: Detect if background is light (real-world) or dark (dataset-style)
-    # Check the average brightness of the border pixels (corners + edges)
-    
-    h, w = img_np.shape
+    img_np = np.array(pil_image.convert("L"))
+    h, w   = img_np.shape
+
+    # Detect background colour from border pixels
     border = np.concatenate([
-        img_np[0, :], img_np[-1, :],      # top and bottom rows
-        img_np[:, 0], img_np[:, -1]       # left and right columns
+        img_np[0, :], img_np[-1, :],
+        img_np[:, 0], img_np[:, -1],
     ])
-    avg_border = border.mean()
-    # If border is mostly bright → real-world photo (dark ink on white paper) → invert
-    if avg_border > 128:
+    if border.mean() > 128:          # light background → real-world photo
         img_np = 255 - img_np
-    # Step 2: Threshold — keep only the letter (white on black after inversion)
-    _, binary = cv2.threshold(img_np, 50, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    # Step 3: Find bounding box of the letter and crop tightly
+
+    # Otsu threshold → clean binary image
+    _, binary = cv2.threshold(img_np, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Tight crop around the letter
     coords = cv2.findNonZero(binary)
     if coords is not None:
-        x, y, cw, ch = cv2.boundingRect(coords)
         pad = 4
-        x1 = max(0, x - pad)
-        y1 = max(0, y - pad)
-        x2 = min(w, x + cw + pad)
-        y2 = min(h, y + ch + pad)
+        x, y, cw, ch = cv2.boundingRect(coords)
+        x1 = max(0, x - pad);  y1 = max(0, y - pad)
+        x2 = min(w, x + cw + pad);  y2 = min(h, y + ch + pad)
         binary = binary[y1:y2, x1:x2]
-    # Step 4: Make square (pad shorter side) so resize doesn't distort aspect ratio
+
+    # Pad to square so resize doesn't distort aspect ratio
     ch, cw = binary.shape
-    side = max(ch, cw)
+    side    = max(ch, cw)
     squared = np.zeros((side, side), dtype=np.uint8)
-    y_off = (side - ch) // 2
-    x_off = (side - cw) // 2
-    squared[y_off:y_off+ch, x_off:x_off+cw] = binary
- 
+    squared[(side - ch) // 2:(side - ch) // 2 + ch,
+            (side - cw) // 2:(side - cw) // 2 + cw] = binary
+
+    # Return as grayscale PIL image; each transform pipeline handles RGB conversion
     return Image.fromarray(squared)
 
-def predict_single(pil_image: Image.Image) -> dict:
-    preprocessed = smart_preprocess(pil_image)
-    tensor = transform(preprocessed).unsqueeze(0).to(DEVICE)
 
-    with torch.no_grad():
-        logits = model(tensor)
-        probs = torch.softmax(logits, dim=1)
-        confidence, predicted_idx = probs.max(dim=1)
-
-    label = CLASS_NAMES[predicted_idx.item()]
-    conf = round(confidence.item(), 4)
-    return {"character": label, "confidence": conf}
-
+# ── Segmentation ──────────────────────────────────────────────────────────────
 def segment_characters(pil_image: Image.Image) -> list[Image.Image]:
     """
-    Splits a word image into individual character images.
-    Uses connected component analysis on a preprocessed binary image.
-    Returns list of character PIL images sorted left-to-right.
+    Splits a word image into individual character PIL images (left → right).
+    Uses connected-component analysis on a binarised version of the input.
     """
-    img = pil_image.convert("L")
-    img_np = np.array(img)
- 
-    # Invert if needed (same logic as smart_preprocess)
+    img_np = np.array(pil_image.convert("L"))
+
     border = np.concatenate([img_np[0, :], img_np[-1, :], img_np[:, 0], img_np[:, -1]])
     if border.mean() > 128:
         img_np = 255 - img_np
- 
+
     _, binary = cv2.threshold(img_np, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
- 
-    # Dilate slightly to connect broken strokes within a single character
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+
+    # Slight dilation to reconnect broken strokes within one character
+    kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
     dilated = cv2.dilate(binary, kernel, iterations=1)
- 
-    # Find connected components
+
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(dilated)
- 
+
     char_images = []
-    min_area = 10  # ignore tiny noise blobs
- 
-    for i in range(1, num_labels):  # skip label 0 (background)
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area < min_area:
+    MIN_AREA    = 10   # ignore tiny noise blobs
+
+    for i in range(1, num_labels):   # 0 = background
+        if stats[i, cv2.CC_STAT_AREA] < MIN_AREA:
             continue
-        x = stats[i, cv2.CC_STAT_LEFT]
-        y = stats[i, cv2.CC_STAT_TOP]
-        w = stats[i, cv2.CC_STAT_WIDTH]
-        h = stats[i, cv2.CC_STAT_HEIGHT]
-        char_crop = binary[y:y+h, x:x+w]
-        char_images.append((x, Image.fromarray(char_crop)))  # keep x for sorting
- 
-    # Sort left → right
+        x  = stats[i, cv2.CC_STAT_LEFT]
+        y  = stats[i, cv2.CC_STAT_TOP]
+        cw = stats[i, cv2.CC_STAT_WIDTH]
+        ch = stats[i, cv2.CC_STAT_HEIGHT]
+        char_images.append((x, Image.fromarray(binary[y:y + ch, x:x + cw])))
+
     char_images.sort(key=lambda t: t[0])
     return [img for _, img in char_images]
 
-app = FastAPI(title="Handwritten Character Recognition API")
-model = load_model_from(MODEL_PATH)  # Load trained model
-# transfer_model = load_model_from(TRANSFER_MODEL_PATH)  # fine-tuned CNN
+
+# ── Prediction helpers ─────────────────────────────────────────────────────────
+def predict_top3_cnn(pil_image: Image.Image) -> list[dict]:
+    preprocessed = smart_preprocess(pil_image)
+    tensor = transform_cnn(preprocessed).unsqueeze(0).to(DEVICE)
+    with torch.no_grad():
+        probs = torch.softmax(cnn_model(tensor), dim=1)[0]
+    top3 = probs.topk(3)
+    return [
+        {"character": CLASS_NAMES[i], "confidence": round(p.item(), 4)}
+        for p, i in zip(top3.values, top3.indices)
+    ]
+
+
+def predict_top3_transfer(pil_image: Image.Image) -> list[dict]:
+    preprocessed = smart_preprocess(pil_image)
+    tensor = transform_transfer(preprocessed).unsqueeze(0).to(DEVICE)
+    with torch.no_grad():
+        probs = torch.softmax(transfer_model(tensor), dim=1)[0]
+    top3 = probs.topk(3)
+    return [
+        {"character": CLASS_NAMES[i], "confidence": round(p.item(), 4)}
+        for p, i in zip(top3.values, top3.indices)
+    ]
+
+
+# ── Load models at startup ─────────────────────────────────────────────────────
+cnn_model      = load_cnn_model(MODEL_PATH)
+transfer_model = load_transfer_model(TRANSFER_MODEL_PATH)
+
+# ── FastAPI app ────────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="Handwritten Character Recognition API",
+    description="SimpleCNN vs MobileNetV2 — A-Z recognition",
+    version="2.0.0",
+)
+
 
 @app.get("/health", summary="Health check")
 def health():
     return {
         "status": "ok",
-        "model_type": MODEL_TYPE,
         "device": str(DEVICE),
         "num_classes": NUM_CLASSES,
         "classes": CLASS_NAMES,
+        "models": {
+            "cnn": "SimpleCNN (best_model_v2.pth)",
+            "mobilenet": "MobileNetV2 fine-tuned (Transfer_Final.pth)",
+        },
+        "img_sizes": {
+            "cnn": IMG_SIZE_CNN,
+            "mobilenet": IMG_SIZE_TRANSFER,
+        },
     }
 
-@app.post("/predict", summary="Predict a single handwritten character")
-async def predict(file: UploadFile = File(...)):
+
+@app.post("/predict-compare", summary="Top-3 predictions from both models — single character")
+async def predict_compare(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image.")
+        raise HTTPException(400, "File must be an image.")
     try:
         pil_image = Image.open(io.BytesIO(await file.read()))
     except Exception:
-        raise HTTPException(status_code=400, detail="Could not read image file.")
-    return predict_single(pil_image)
+        raise HTTPException(400, "Could not read image file.")
+
+    return {
+        "cnn":      predict_top3_cnn(pil_image),
+        "mobilenet": predict_top3_transfer(pil_image),
+    }
 
 
-@app.post("/predict-word", summary="Predict a handwritten word")
-async def predict_word(file: UploadFile = File(...)):
+@app.post("/predict-word-compare", summary="Compare word prediction from both models")
+async def predict_word_compare(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image.")
+        raise HTTPException(400, "File must be an image.")
     try:
         pil_image = Image.open(io.BytesIO(await file.read()))
     except Exception:
-        raise HTTPException(status_code=400, detail="Could not read image file.")
+        raise HTTPException(400, "Could not read image file.")
 
     char_images = segment_characters(pil_image)
-
     if not char_images:
-        raise HTTPException(status_code=422, detail="No characters detected.")
+        raise HTTPException(422, "No characters detected in the image.")
 
-    characters = []
-    for i, char_img in enumerate(char_images):
-        result = predict_single(char_img)
-        result["position"] = i + 1
-        characters.append(result)
+    def build_result(predictor):
+        characters = []
+        for i, char_img in enumerate(char_images):
+            top3 = predictor(char_img)
+            characters.append({
+                "position":   i + 1,
+                "character":  top3[0]["character"],
+                "confidence": top3[0]["confidence"],
+                "top3":       top3,
+            })
+        word = "".join(c["character"] for c in characters)
+        return {"word": word, "num_characters": len(characters), "characters": characters}
 
-    word = "".join(c["character"] for c in characters)
-    return {"word": word, "num_characters": len(characters), "characters": characters}
+    return {
+        "cnn":      build_result(predict_top3_cnn),
+        "mobilenet": build_result(predict_top3_transfer),
+    }
 
 
 # Run: uvicorn app:app --reload --port 8000
 # Docs: http://localhost:8000/docs
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
- 
