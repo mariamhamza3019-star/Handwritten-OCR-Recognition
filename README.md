@@ -21,9 +21,7 @@ Whether you're digitizing handwritten notes, building assistive tools for access
  
 ##  Project Structure
  
-```
 
----
  
 ## Features
  
@@ -122,7 +120,7 @@ This ensures a fair and consistent evaluation process.
 
 # Model Architecture (Custom Head)
 
-```text
+
 Backbone (Frozen initially)
         ↓
 Linear(1280 → 1024)
@@ -136,7 +134,7 @@ LeakyReLU
 Dropout(0.2)
         ↓
 Linear(512 → 26)
-```
+
 
 ---
 
