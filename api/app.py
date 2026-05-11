@@ -53,7 +53,7 @@ class SimpleCNN(nn.Module):
 
 # ── MobileNetV2 — must exactly mirror build_model() in the notebook ────────────
 # Notebook trains with IMAGENET1K_V1 weights then saves full state_dict.
-# At inference we use weights=None and load everything from the .pth file.
+# At inference we use weights=None and load everything from the .pth file
 def build_mobilenet(num_classes: int = 26) -> nn.Module:
     model = models.mobilenet_v2(weights=None)   # architecture only; weights come from .pth
     in_features = model.classifier[1].in_features  # 1280
