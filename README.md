@@ -50,7 +50,7 @@ Handwritten-Character-Recognition-OCR/
 ├── 🧪 test_pictures/               # Sample input images for quick testing
 │   ├── sample_A.png
 │   ├── sample_B.png
-│   └── ...                         # One image per character class
+│   └── ...                         
 │
 ├── docker-compose.yml              # Docker Compose configuration
 └── 📄 README.md
@@ -68,111 +68,18 @@ Handwritten-Character-Recognition-OCR/
 - ✅ Reproducible Jupyter notebooks with step-by-step training
 - ✅ Rich evaluation visuals — confusion matrix, training curves, sample predictions
 ---
- 
-## 🚀 Getting Started
- 
-### Option 1 — Run Locally
- 
-#### Prerequisites
- 
-- Python 3.8+
-- pip
-#### Installation
- 
-```bash
-# Clone the repository
-git clone https://github.com/mariamhamza3019-star/Handwritten-Character-Recognition-OCR.git
-cd Handwritten-Character-Recognition-OCR
- 
-# Install dependencies
-pip install -r api/requirements.txt
-```
- 
-#### Launch the API
- 
-```bash
-cd api/
-python app.py
-```
- 
-The server will start at `http://localhost:5000`.
- 
----
- 
-### Option 2 — Run with Docker 🐳
- 
-No environment setup needed. Docker handles everything.
- 
-```bash
-# Build and start the container
-docker-compose up --build
-```
- 
-Or using just Docker:
- 
-```bash
-docker build -t ocr-api ./api
-docker run -p 5000:5000 ocr-api
-```
- 
-The API will be available at `http://localhost:5000`.
- 
----
- 
-## 🧪 Testing with Sample Images
- 
-The `test_pictures/` folder contains ready-to-use handwritten character images — one per character class. Use them to immediately verify the API is working after setup, no need to source your own test data.
- 
-```bash
-# Test with a single sample image
-curl -X POST http://localhost:5000/predict \
-  -F "image=@test_pictures/sample_A.png"
-```
- 
-Expected response:
- 
-```json
-{
-  "prediction": "A",
-  "confidence": 0.97
-}
-```
- 
-You can loop through all test images to do a quick batch sanity check:
- 
-```bash
-for img in test_pictures/*.png; do
-  echo -n "$img → "
-  curl -s -X POST http://localhost:5000/predict -F "image=@$img" | python3 -m json.tool
-done
-```
- 
-Or test programmatically in Python:
- 
-```python
-import requests, os
- 
-api_url = "http://localhost:5000/predict"
- 
-for filename in os.listdir("test_pictures"):
-    filepath = os.path.join("test_pictures", filename)
-    with open(filepath, "rb") as f:
-        response = requests.post(api_url, files={"image": f})
-    print(f"{filename}: {response.json()}")
-```
- 
----
- 
+
 ## 📓 Notebooks Walkthrough
  
 The `notebooks/` folder is a complete, self-contained training environment. Run them in order:
  
 | # | Notebook | What it does |
 |---|----------|-------------|
-| 01 | `data_exploration.ipynb` | Loads the dataset, visualizes class distribution, inspects sample images |
-| 02 | `preprocessing.ipynb` | Applies grayscale conversion, noise removal, binarization, resizing, and augmentation |
-| 03 | `model_training.ipynb` | Defines CNN architecture, trains the model, saves weights to `models/` |
-| 04 | `evaluation.ipynb` | Runs the trained model on the test set, plots confusion matrix and accuracy curves |
+| 01 | `01_Data_Manger.ipynb` | Loads the dataset, visualizes class distribution, inspects sample images |
+| 02 | `02_EDA&Visualization.ipynb` | Applies grayscale conversion, noise removal, binarization, resizing, and augmentation |
+| 03 | `03_Augmentation.ipynb` | Defines CNN architecture, trains the model, saves weights to `models/` |
+| 04 | `04_CNN_Model.ipynb` | CNN built from scratch and evaluated, plots confusion matrix and accuracy curves |
+| 04 | `05_TransferLearning.ipynb` | Transfer Learning via Mobilenetv2 and evaluation |
  
 ```bash
 # Launch Jupyter
@@ -181,7 +88,7 @@ jupyter notebook notebooks/
  
 ---
  
-## 🧠 Model Architecture
+## 🧠 Model Architecture in API
  
 The recognition pipeline consists of five stages:
  
@@ -220,9 +127,9 @@ Raw Image
  
 | Metric | Score |
 |--------|-------|
-| Training Accuracy | ~98% |
-| Validation Accuracy | ~95% |
-| Test Accuracy | ~93% |
+| Training Accuracy | ~99% |
+| Validation Accuracy | ~98% |
+| Test Accuracy | ~99% |
  
 Detailed plots and per-class breakdowns are in the `visuals/` folder:
  
@@ -280,24 +187,13 @@ print(response.json())
 | Tool | Purpose |
 |------|---------|
 | Python | Core language |
-| TensorFlow / Keras | Model training & inference |
+| Pytorch | Model training & inference |
 | OpenCV | Image preprocessing |
-| Flask / FastAPI | REST API server |
+| FastAPI | REST API server |
 | Docker | Containerized deployment |
 | Matplotlib / Seaborn | Training visualizations |
 | Jupyter Notebook | Interactive experimentation |
  
----
- 
-## 🤝 Contributing
- 
-Contributions, issues, and feature requests are welcome!
- 
-1. Fork the repo
-2. Create your branch: `git checkout -b feature/your-feature`
-3. Commit your changes: `git commit -m 'Add some feature'`
-4. Push to the branch: `git push origin feature/your-feature`
-5. Open a Pull Request
 ---
  
 ## 👩‍💻 Author
