@@ -7,17 +7,17 @@ import cv2
 from PIL import Image
 from torchvision import transforms, models
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-MODEL_PATH          = "best_model_v2.pth"      # SimpleCNN weights
-TRANSFER_MODEL_PATH = "Transfer_Final.pth"     # MobileNetV2 fine-tuned weights (Phase 3 best)
+# Constants 
+MODEL_PATH          = "best_model_v2.pth"      # SimpleCNN
+TRANSFER_MODEL_PATH = "Transfer_Final.pth"     # MobileNetV2
 NUM_CLASSES         = 26
 DEVICE              = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CLASS_NAMES         = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
 
 IMG_SIZE_CNN      = 28
-IMG_SIZE_TRANSFER = 128   # must match notebook IMG_SIZE = 128
+IMG_SIZE_TRANSFER = 128   
 
-# ── SimpleCNN (unchanged from original) ───────────────────────────────────────
+# SimpleCNN 
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=26):
         super().__init__()
@@ -51,7 +51,7 @@ class SimpleCNN(nn.Module):
         return self.classifier(self.features(x))
 
 
-# ── MobileNetV2 — must exactly mirror build_model() in the notebook ────────────
+# MobileNetV2
 # Notebook trains with IMAGENET1K_V1 weights then saves full state_dict.
 # At inference we use weights=None and load everything from the .pth file
 def build_mobilenet(num_classes: int = 26) -> nn.Module:
@@ -73,8 +73,8 @@ def build_mobilenet(num_classes: int = 26) -> nn.Module:
     return model
 
 
-# ── Transforms ────────────────────────────────────────────────────────────────
-# CNN: grayscale 28×28, normalised to [-1, 1]
+# Transforms 
+# CNN
 transform_cnn = transforms.Compose([
     transforms.Grayscale(),
     transforms.Resize((IMG_SIZE_CNN, IMG_SIZE_CNN)),
@@ -82,10 +82,7 @@ transform_cnn = transforms.Compose([
     transforms.Normalize((0.5,), (0.5,)),
 ])
 
-# MobileNet: convert to RGB *first* (smart_preprocess returns grayscale PIL),
-# then resize and apply ImageNet normalisation.
-# Order matters: Grayscale→RGB→Resize matches the notebook's CharDataset
-# which stacks the single channel 3× before applying transforms.
+# MobileNet
 transform_transfer = transforms.Compose([
     transforms.Lambda(lambda img: img.convert("RGB")),   # L → RGB  (no info added, just channel copy)
     transforms.Resize(
@@ -97,7 +94,7 @@ transform_transfer = transforms.Compose([
 ])
 
 
-# ── Model loading helpers ──────────────────────────────────────────────────────
+# Model loading helpers 
 def _load_weights(model: nn.Module, path: str, label: str) -> nn.Module:
     try:
         state = torch.load(path, map_location=DEVICE)
@@ -122,7 +119,7 @@ def load_transfer_model(path: str) -> nn.Module:
     return _load_weights(build_mobilenet(NUM_CLASSES), path, "MobileNetV2")
 
 
-# ── Preprocessing ─────────────────────────────────────────────────────────────
+#Preprocessing
 def smart_preprocess(pil_image: Image.Image) -> Image.Image:
     """
     Normalises an input image so it looks like dataset images:
@@ -166,7 +163,7 @@ def smart_preprocess(pil_image: Image.Image) -> Image.Image:
     return Image.fromarray(squared)
 
 
-# ── Segmentation ──────────────────────────────────────────────────────────────
+# Segmentation 
 def segment_characters(pil_image: Image.Image) -> list[Image.Image]:
     """
     Splits a word image into individual character PIL images (left → right).
@@ -202,7 +199,7 @@ def segment_characters(pil_image: Image.Image) -> list[Image.Image]:
     return [img for _, img in char_images]
 
 
-# ── Prediction helpers ─────────────────────────────────────────────────────────
+#Prediction helpers
 def predict_top3_cnn(pil_image: Image.Image) -> list[dict]:
     preprocessed = smart_preprocess(pil_image)
     tensor = transform_cnn(preprocessed).unsqueeze(0).to(DEVICE)
@@ -227,11 +224,11 @@ def predict_top3_transfer(pil_image: Image.Image) -> list[dict]:
     ]
 
 
-# ── Load models at startup ─────────────────────────────────────────────────────
+#Load models at startup
 cnn_model      = load_cnn_model(MODEL_PATH)
 transfer_model = load_transfer_model(TRANSFER_MODEL_PATH)
 
-# ── FastAPI app ────────────────────────────────────────────────────────────────
+#FastAPI app 
 app = FastAPI(
     title="Handwritten Character Recognition API",
     description="SimpleCNN vs MobileNetV2 — A-Z recognition",
@@ -304,8 +301,6 @@ async def predict_word_compare(file: UploadFile = File(...)):
     }
 
 
-# Run: uvicorn app:app --reload --port 8000
-# Docs: http://localhost:8000/docs
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
